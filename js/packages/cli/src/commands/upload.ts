@@ -212,86 +212,79 @@ export async function uploadV2({
       }
       log.info('Upload done.');
     } else {
-      let lastPrinted = 0;
-      const tick = SIZE / 100; //print every one percent
+      const filesAsChunks = chunks(
+        Array.from(Array(SIZE).keys()),
+        batchSize || 50,
+      );
 
       await Promise.all(
-        chunks(Array.from(Array(SIZE).keys()), batchSize || 50).map(
-          async allIndexesInSlice => {
-            for (let i = 0; i < allIndexesInSlice.length; i++) {
-              const assetKey = dedupedAssetKeys[allIndexesInSlice[i]];
-              const image = path.join(
-                dirname,
-                `${assetKey.index}${assetKey.mediaExt}`,
-              );
-              const manifest = getAssetManifest(
-                dirname,
-                assetKey.index.includes('json')
-                  ? assetKey.index
-                  : `${assetKey.index}.json`,
-              );
-              const manifestBuffer = Buffer.from(JSON.stringify(manifest));
+        filesAsChunks.map(async chunk => {
+          for (let x = 0; x < chunk.length; x++) {
+            console.log(`Processing file: ${chunk[x]}`);
+            const assetKey = dedupedAssetKeys[chunk[x]];
+            const image = path.join(
+              dirname,
+              `${assetKey.index}${assetKey.mediaExt}`,
+            );
+            const manifest = getAssetManifest(
+              dirname,
+              assetKey.index.includes('json')
+                ? assetKey.index
+                : `${assetKey.index}.json`,
+            );
+            const manifestBuffer = Buffer.from(JSON.stringify(manifest));
 
-              if (
-                allIndexesInSlice[i] >= lastPrinted + tick ||
-                allIndexesInSlice[i] === 0
-              ) {
-                lastPrinted = allIndexesInSlice[i];
-                log.info(`Processing asset: ${allIndexesInSlice[i]}`);
+            let link, imageLink;
+            try {
+              switch (storage) {
+                case StorageType.NftStorage:
+                  [link, imageLink] = await nftStorageUpload(
+                    nftStorageKey,
+                    image,
+                    manifestBuffer,
+                  );
+                  break;
+                case StorageType.Ipfs:
+                  [link, imageLink] = await ipfsUpload(
+                    ipfsCredentials,
+                    image,
+                    manifestBuffer,
+                  );
+                  break;
+                case StorageType.Aws:
+                  [link, imageLink] = await awsUpload(
+                    awsS3Bucket,
+                    image,
+                    manifestBuffer,
+                  );
+                  break;
+                case StorageType.Arweave:
+                default:
+                  [link, imageLink] = await arweaveUpload(
+                    walletKeyPair,
+                    anchorProgram,
+                    env,
+                    image,
+                    manifestBuffer,
+                    manifest,
+                    assetKey.index,
+                  );
               }
-
-              let link, imageLink;
-              try {
-                switch (storage) {
-                  case StorageType.NftStorage:
-                    [link, imageLink] = await nftStorageUpload(
-                      nftStorageKey,
-                      image,
-                      manifestBuffer,
-                    );
-                    break;
-                  case StorageType.Ipfs:
-                    [link, imageLink] = await ipfsUpload(
-                      ipfsCredentials,
-                      image,
-                      manifestBuffer,
-                    );
-                    break;
-                  case StorageType.Aws:
-                    [link, imageLink] = await awsUpload(
-                      awsS3Bucket,
-                      image,
-                      manifestBuffer,
-                    );
-                    break;
-                  case StorageType.Arweave:
-                  default:
-                    [link, imageLink] = await arweaveUpload(
-                      walletKeyPair,
-                      anchorProgram,
-                      env,
-                      image,
-                      manifestBuffer,
-                      manifest,
-                      assetKey.index,
-                    );
-                }
-                if (link && imageLink) {
-                  log.debug('Updating cache for ', allIndexesInSlice[i]);
-                  cacheContent.items[assetKey.index] = {
-                    link,
-                    name: manifest.name,
-                    onChain: false,
-                  };
-                  saveCache(cacheName, env, cacheContent);
-                }
-              } catch (err) {
-                log.error(`Error uploading file ${assetKey}`, err);
-                i--;
+              if (link && imageLink) {
+                log.debug('Updating cache for ', chunk[x]);
+                cacheContent.items[assetKey.index] = {
+                  link,
+                  name: manifest.name,
+                  onChain: false,
+                };
+                saveCache(cacheName, env, cacheContent);
               }
+              await new Promise(resolve => setTimeout(resolve, 30000));
+            } catch (err) {
+              log.error(`Error uploading file ${assetKey}`, err);
             }
-          },
-        ),
+          }
+        }),
       );
     }
 
